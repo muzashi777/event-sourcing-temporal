@@ -1,0 +1,124 @@
+name: microservices-demo
+services:
+  # 1. Database (ต้องทำ Replica Set สำหรับ Change Stream)
+  mongo:
+    image: mongo:8.2.4
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./scripts/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    healthcheck: # สคริปต์ช่วยเปิด Replica Set อัตโนมัติ
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0', members:[{_id:0, host:'mongo:27017'}]}) }" | mongosh --port 27017 --quiet
+      interval: 5s   # เช็คทุกๆ 5 วินาที
+      timeout: 5s
+      retries: 10    # ลอ 10 ครั้ง (รวม 50 วินาที)
+      start_period: 5s # รอ 5 วินาทีก่อนเริ่มเช็คครั้งแรก
+    networks:
+      - microservices-net
+
+  # 2. Temporal Server (All-in-one for Dev)
+  temporal:
+    image: temporalio/temporal:1.5.1
+    command: ["server", "start-dev", "--ip", "0.0.0.0","--metrics-port", "8000"]
+    environment:
+      - PROMETHEUS_ENDPOINT=0.0.0.0:8000
+    #   - DB=postgresql # ใช้ postgres เก็บ state ของ temporal
+    ports:
+      # - "7233:7233" # gRPC Port
+      - "8233:8233" # UI Port
+      - "8000:8000" # Prometheus Metrics
+    depends_on:
+      - mongo
+    networks:
+      - microservices-net
+
+  # 3. Order Service (API & Orchestrator)
+  external-orchestrator:
+    build: 
+      context: ./external-orchestrator
+    container_name: external-orchestrator
+    ports:
+      - "8080:8080"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/?directConnection=true
+      - TEMPORAL_HOST=temporal:7233
+    depends_on:
+      temporal:
+        condition: service_started
+      mongo:
+        condition: service_healthy
+    networks:
+      - microservices-net
+
+  # 4. Inventory Service (Worker)
+  inventory-service:
+    build: 
+      context: ./inventory-service
+    container_name: inventory-service
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/?directConnection=true
+      - TEMPORAL_HOST=temporal:7233
+    depends_on:
+      temporal:
+        condition: service_started
+      mongo:
+        condition: service_healthy
+    networks:
+      - microservices-net
+
+  # 5. Payment Service (Worker)
+  payment-service:
+    build: 
+      context: ./payment-service
+    container_name: payment-service
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/?directConnection=true
+      - TEMPORAL_HOST=temporal:7233
+    depends_on:
+      temporal:
+        condition: service_started
+      mongo:
+        condition: service_healthy
+    networks:
+      - microservices-net
+
+
+  # 6. Projector Service (Change Stream Listener)
+  projector-service:
+    build: 
+      context: ./projector-service
+    container_name: projector-service
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/?directConnection=true
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - microservices-net
+      
+  prometheus:
+    image: prom/prometheus:v3.5.1
+    container_name: prometheus
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - microservices-net
+
+  grafana:
+    image: grafana/grafana:12.3
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin # รหัสเข้า
+    depends_on:
+      - prometheus
+    networks:
+      - microservices-net
+
+networks:
+  microservices-net:
+    driver: bridge

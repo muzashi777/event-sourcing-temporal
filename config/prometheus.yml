@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 5s # ดึงข้อมูลทุก 5 วินาที
+
+scrape_configs:
+  # 1. ดู Metric ของ Temporal Server (ตัวระบบหลัก)
+  - job_name: 'temporal-server'
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets: ['temporal:8000'] # Port มาตรฐานของ Temporal Auto-Setup
+
+  # 2. ดู Metric ของ Worker ของคุณ (Order, Inventory)
+  # (ต้องแก้ Code Go เพิ่มนิดหน่อยเพื่อให้ยิงออก ถ้ายังไม่ได้ทำข้ามไปก่อนได้)
+  # - job_name: 'my-go-services'
+  #   static_configs:
+  #     - targets: ['order-service:9090', 'inventory-service:9090']
